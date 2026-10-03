@@ -242,14 +242,45 @@
       // 3. Videos
       const videos = [];
       row.querySelectorAll('video').forEach(v => {
-        if (v.src) videos.push(v.src);
+        const src = v.src || (v.querySelector('source') ? v.querySelector('source').src : '');
+        if (src) videos.push(src);
       });
 
-      // 4. Stickers
+      // 4. Voice Notes & Audio Clips
+      const audios = [];
+      row.querySelectorAll('audio').forEach(a => {
+        const src = a.src || (a.querySelector('source') ? a.querySelector('source').src : '');
+        if (src && !audios.includes(src)) audios.push(src);
+      });
+      row.querySelectorAll('[aria-label*="voice clip"], [aria-label*="tin nhắn thoại"], [aria-label*="Voice"]').forEach(vEl => {
+        const a = vEl.querySelector('audio');
+        if (a && a.src && !audios.includes(a.src)) audios.push(a.src);
+      });
+
+      // 5. File & Document Attachments
+      const files = [];
+      row.querySelectorAll('a[href*="attachment"], a[download], a[href*="messages/attachments"]').forEach(a => {
+        const fileName = a.innerText.trim() || a.getAttribute('download') || 'Document Attachment';
+        if (fileName && a.href && !a.href.startsWith('javascript')) {
+          files.push({ name: fileName.slice(0, 100), url: a.href });
+        }
+      });
+
+      // 6. Stickers
       const stickers = [];
       row.querySelectorAll('img[src*="sticker"]').forEach(s => {
         if (s.src) stickers.push(s.src);
       });
+
+      // 7. Reply Quote Detection
+      let replyTo = null;
+      const replyBlock = row.querySelector('[aria-label*="replied"], [aria-label*="đã trả lời"], [data-scope="quoted_message"]');
+      if (replyBlock) {
+        const quoteText = replyBlock.innerText.trim();
+        if (quoteText && quoteText !== text) {
+          replyTo = { text: quoteText.slice(0, 200) };
+        }
+      }
 
       // 5. Timestamp
       let timestamp = '';
@@ -280,8 +311,8 @@
         }
       }
 
-      // Valid message condition: must contain text OR images OR videos OR stickers
-      if (text || images.length > 0 || videos.length > 0 || stickers.length > 0) {
+      // Valid message condition: must contain text OR images OR videos OR audios OR files OR stickers
+      if (text || images.length > 0 || videos.length > 0 || audios.length > 0 || files.length > 0 || stickers.length > 0) {
         // Tag DOM element with unique ID to avoid re-extraction in same node
         let elemId = row.__mce_id__;
         if (!elemId) {
@@ -290,8 +321,8 @@
         }
 
         const imgHash = images.map(i => i.src.split('?')[0]).join('|');
-        // Composite signature: sender + text length + text snippet + imgHash + timestamp
-        const signature = `${sender}__${text}__${imgHash}__${timestamp}`;
+        const fileHash = files.map(f => f.name).join('|');
+        const signature = `${sender}__${text}__${imgHash}__${fileHash}__${timestamp}`;
 
         frameMessages.push({
           id: elemId,
@@ -301,7 +332,10 @@
           timestamp: timestamp || new Date().toLocaleTimeString(),
           images,
           videos,
+          audios,
+          files,
           stickers,
+          replyTo,
           isOutgoing: sender === 'You',
           captureTime: Date.now()
         });
@@ -338,11 +372,15 @@
   }
 
   function getScrollInterval() {
-    switch (scrollSpeedMode) {
-      case 'turbo': return 450;
-      case 'fast': return 750;
-      default: return 1200;
+    let base = 450;
+    if (scrollSpeedMode === 'fast') base = 750;
+    else if (scrollSpeedMode === 'normal') base = 1200;
+
+    // Exponential backoff during idle to give Facebook GraphQL time to load deep history
+    if (idleCount > 4) {
+      return Math.min(2600, base + (idleCount - 4) * 120);
     }
+    return base;
   }
 
   function scrollStep() {
@@ -371,8 +409,21 @@
 
     if (newCount === prevCount) {
       idleCount++;
-      broadcastStatus(`Loading older history... (${idleCount}/20)`);
-      if (idleCount >= 20) {
+      broadcastStatus(`Loading older history... (${idleCount}/35)`);
+
+      // Adaptive Jiggle Scroll: every 4 idle attempts, jiggle scroll position down then up
+      // to trigger Facebook's IntersectionObserver for deep history
+      if (idleCount % 4 === 0 && scrollContainer) {
+        scrollContainer.scrollTop = 160;
+        setTimeout(() => {
+          if (scrollContainer) {
+            scrollContainer.scrollTop = 0;
+            scrollContainer.dispatchEvent(new WheelEvent('wheel', { deltaY: -1200, bubbles: true }));
+          }
+        }, 120);
+      }
+
+      if (idleCount >= 35) {
         stopExtraction();
         broadcastStatus('Reached top of chat history! Exporting...');
         return;

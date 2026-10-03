@@ -178,6 +178,58 @@ function generateOfflineHTML(data) {
       transform: scale(1.03);
     }
 
+    .msg-reply-box {
+      font-size: 11px;
+      color: var(--text-secondary);
+      background: rgba(255, 255, 255, 0.05);
+      border-left: 3px solid var(--accent);
+      padding: 4px 8px;
+      border-radius: 4px;
+      margin-bottom: 4px;
+      max-width: 100%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .msg-audio {
+      margin-top: 6px;
+    }
+
+    .msg-audio audio {
+      height: 36px;
+      border-radius: 20px;
+      outline: none;
+      max-width: 260px;
+    }
+
+    .msg-files {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 6px;
+    }
+
+    .file-attach-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      color: var(--accent);
+      font-size: 12px;
+      text-decoration: none;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+
+    .file-attach-btn:hover {
+      background: rgba(0, 132, 255, 0.15);
+      border-color: var(--accent);
+    }
+
     .msg-time {
       font-size: 10px;
       color: var(--text-secondary);
@@ -265,6 +317,13 @@ function generateOfflineHTML(data) {
           row.appendChild(senderDiv);
         }
 
+        if (msg.replyTo && msg.replyTo.text) {
+          const replyDiv = document.createElement('div');
+          replyDiv.className = 'msg-reply-box';
+          replyDiv.innerText = '↩ ' + msg.replyTo.text;
+          row.appendChild(replyDiv);
+        }
+
         if (msg.text) {
           const bubbleDiv = document.createElement('div');
           bubbleDiv.className = 'msg-bubble';
@@ -283,6 +342,33 @@ function generateOfflineHTML(data) {
             mediaDiv.appendChild(imgEl);
           });
           row.appendChild(mediaDiv);
+        }
+
+        if (msg.audios && msg.audios.length > 0) {
+          const audioDiv = document.createElement('div');
+          audioDiv.className = 'msg-audio';
+          msg.audios.forEach(src => {
+            const audioEl = document.createElement('audio');
+            audioEl.controls = true;
+            audioEl.src = src;
+            audioDiv.appendChild(audioEl);
+          });
+          row.appendChild(audioDiv);
+        }
+
+        if (msg.files && msg.files.length > 0) {
+          const filesDiv = document.createElement('div');
+          filesDiv.className = 'msg-files';
+          msg.files.forEach(f => {
+            const a = document.createElement('a');
+            a.className = 'file-attach-btn';
+            a.href = f.url;
+            a.target = '_blank';
+            a.rel = 'noreferrer';
+            a.innerText = '📎 ' + f.name;
+            filesDiv.appendChild(a);
+          });
+          row.appendChild(filesDiv);
         }
 
         if (msg.timestamp) {

@@ -160,10 +160,23 @@ function exportTXT(data, filename) {
   let txtContent = `Chat Archive: ${data.title}\nExported At: ${data.exportedAt}\nTotal Messages: ${data.messages.length}\n${'='.repeat(60)}\n\n`;
 
   data.messages.forEach(msg => {
+    if (msg.replyTo && msg.replyTo.text) {
+      txtContent += `   ↪ Replying to: "${msg.replyTo.text}"\n`;
+    }
     txtContent += `[${msg.timestamp}] ${msg.sender}: ${msg.text}\n`;
     if (msg.images && msg.images.length > 0) {
       msg.images.forEach(img => {
         txtContent += `   [Image Attachment: ${img.src}]\n`;
+      });
+    }
+    if (msg.audios && msg.audios.length > 0) {
+      msg.audios.forEach(aud => {
+        txtContent += `   [Audio Clip: ${aud}]\n`;
+      });
+    }
+    if (msg.files && msg.files.length > 0) {
+      msg.files.forEach(f => {
+        txtContent += `   [File Attachment: ${f.name} -> ${f.url}]\n`;
       });
     }
     txtContent += `\n`;
