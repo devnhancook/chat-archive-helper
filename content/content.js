@@ -18,6 +18,9 @@
   let capturedSignatures = new Set();
   let domObserver = null;
   let lastKnownIncomingSender = 'Friend';
+  let maxMessageLimit = 0;
+  let lastCheckpointSaved = 0;
+  let lastCooldownMilestone = 0;
 
   function broadcastStatus(statusMsg = '') {
     let totalImages = 0;
@@ -36,6 +39,18 @@
 
     // Save to storage for persistent popup reopen
     chrome.storage.local.set({ mceCurrentState: state });
+
+    // Checkpoint auto-save every 200 messages to prevent data loss
+    if (capturedMessages.length >= lastCheckpointSaved + 200) {
+      lastCheckpointSaved = capturedMessages.length;
+      chrome.storage.local.set({
+        mceCheckpointBackup: {
+          title: conversationTitle,
+          messages: capturedMessages,
+          savedAt: new Date().toISOString()
+        }
+      });
+    }
 
     // Broadcast live to popup if open
     chrome.runtime.sendMessage({
@@ -378,9 +393,11 @@
 
     // Exponential backoff during idle to give Facebook GraphQL time to load deep history
     if (idleCount > 4) {
-      return Math.min(2600, base + (idleCount - 4) * 120);
+      base = Math.min(2600, base + (idleCount - 4) * 120);
     }
-    return base;
+    // Human Jitter (+/- 80ms)
+    const jitter = Math.floor(Math.random() * 160) - 80;
+    return Math.max(300, base + jitter);
   }
 
   function scrollStep() {
@@ -391,6 +408,24 @@
 
     extractCurrentDOMMessages();
     const newCount = capturedMessages.length;
+
+    // 1. Check phase target limit
+    if (maxMessageLimit > 0 && newCount >= maxMessageLimit) {
+      if (capturedMessages.length > maxMessageLimit) {
+        capturedMessages = capturedMessages.slice(capturedMessages.length - maxMessageLimit);
+      }
+      broadcastStatus(`Reached phase target of ${maxMessageLimit} messages! Finalizing export...`);
+      stopExtraction();
+      return;
+    }
+
+    // 2. Account protection: 2-second cool-down breath every 500 messages
+    let coolDownDelay = 0;
+    if (newCount > 0 && newCount >= lastCooldownMilestone + 500) {
+      lastCooldownMilestone = newCount;
+      coolDownDelay = 2000;
+      broadcastStatus(`Milestone ${newCount} msgs: taking 2s cool-down breath to protect account...`);
+    }
 
     // Scroll up
     if (scrollContainer && scrollContainer !== document.documentElement) {
@@ -409,7 +444,8 @@
 
     if (newCount === prevCount) {
       idleCount++;
-      broadcastStatus(`Loading older history... (${idleCount}/35)`);
+      const limitText = maxMessageLimit > 0 ? ` (${newCount}/${maxMessageLimit})` : '';
+      broadcastStatus(`Loading older history... (${idleCount}/35)${limitText}`);
 
       // Adaptive Jiggle Scroll: every 4 idle attempts, jiggle scroll position down then up
       // to trigger Facebook's IntersectionObserver for deep history
@@ -430,21 +466,24 @@
       }
     } else {
       idleCount = 0;
-      broadcastStatus(`Capturing: ${capturedMessages.length} messages...`);
+      const limitText = maxMessageLimit > 0 ? ` (${capturedMessages.length}/${maxMessageLimit})` : '';
+      broadcastStatus(`Capturing: ${capturedMessages.length} messages...${limitText}`);
     }
 
-    scrollTimer = setTimeout(scrollStep, getScrollInterval());
+    scrollTimer = setTimeout(scrollStep, getScrollInterval() + coolDownDelay);
   }
 
-  function startExtraction(speed = 'turbo') {
+  function startExtraction(speed = 'turbo', limit = 0) {
     if (isExtracting) return;
     scrollSpeedMode = speed || 'turbo';
+    maxMessageLimit = parseInt(limit, 10) || 0;
     isExtracting = true;
     isPaused = false;
     idleCount = 0;
 
     initMutationObserver();
-    broadcastStatus(`Started auto-scroll (${scrollSpeedMode.toUpperCase()})...`);
+    const limitInfo = maxMessageLimit > 0 ? ` (Target: ${maxMessageLimit} msgs)` : ' (Unlimited)';
+    broadcastStatus(`Started auto-scroll (${scrollSpeedMode.toUpperCase()}${limitInfo})...`);
     scrollStep();
   }
 
@@ -502,10 +541,11 @@
   // Communication API with Extension Popup
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'MCE_START') {
-      startExtraction(request.speed || 'turbo');
+      startExtraction(request.speed || 'turbo', request.limit || 0);
       sendResponse({ status: 'STARTED' });
     } else if (request.type === 'MCE_SET_SPEED') {
       scrollSpeedMode = request.speed || 'turbo';
+      if (request.limit !== undefined) maxMessageLimit = parseInt(request.limit, 10) || 0;
       broadcastStatus(`Speed set to ${scrollSpeedMode.toUpperCase()}`);
       sendResponse({ status: 'OK' });
     } else if (request.type === 'MCE_PAUSE') {

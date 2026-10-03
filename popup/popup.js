@@ -78,25 +78,29 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Update background config on change
   const scrollSpeedEl = document.getElementById('scroll-speed');
+  const messageLimitEl = document.getElementById('message-limit');
 
   function updateConfig() {
     chrome.runtime.sendMessage({
       type: 'MCE_SET_CONFIG',
       data: {
         format: formatSelectEl.value,
-        embedImages: toggleEmbedEl.checked
+        embedImages: toggleEmbedEl.checked,
+        limit: messageLimitEl ? parseInt(messageLimitEl.value, 10) : 0
       }
     });
 
     if (activeTab) {
       chrome.tabs.sendMessage(activeTab.id, {
         type: 'MCE_SET_SPEED',
-        speed: scrollSpeedEl ? scrollSpeedEl.value : 'turbo'
+        speed: scrollSpeedEl ? scrollSpeedEl.value : 'turbo',
+        limit: messageLimitEl ? parseInt(messageLimitEl.value, 10) : 0
       }).catch(() => {});
     }
   }
 
   if (scrollSpeedEl) scrollSpeedEl.addEventListener('change', updateConfig);
+  if (messageLimitEl) messageLimitEl.addEventListener('change', updateConfig);
   formatSelectEl.addEventListener('change', updateConfig);
   toggleEmbedEl.addEventListener('change', updateConfig);
   updateConfig(); // initial
@@ -104,14 +108,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnStart.addEventListener('click', () => {
     if (!activeTab) return;
     const currentSpeed = scrollSpeedEl ? scrollSpeedEl.value : 'turbo';
-    chrome.tabs.sendMessage(activeTab.id, { type: 'MCE_START', speed: currentSpeed }, (response) => {
+    const currentLimit = messageLimitEl ? parseInt(messageLimitEl.value, 10) : 0;
+    chrome.tabs.sendMessage(activeTab.id, { type: 'MCE_START', speed: currentSpeed, limit: currentLimit }, (response) => {
       if (chrome.runtime.lastError) {
         // Script might not be injected, inject content script
         chrome.scripting.executeScript({
           target: { tabId: activeTab.id },
           files: ['content/content.js']
         }, () => {
-          chrome.tabs.sendMessage(activeTab.id, { type: 'MCE_START', speed: currentSpeed });
+          chrome.tabs.sendMessage(activeTab.id, { type: 'MCE_START', speed: currentSpeed, limit: currentLimit });
         });
       }
     });

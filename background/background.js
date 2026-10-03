@@ -59,27 +59,36 @@ async function handleExport(data, config) {
   }
 }
 
-async function convertURLToBase64(url, timeoutMs = 8000) {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+async function convertURLToBase64(url, timeoutMs = 8000, maxRetries = 3) {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    attempt++;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    const response = await fetch(url, { signal: controller.signal });
-    clearTimeout(timer);
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const blob = await response.blob();
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
 
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.onerror = () => resolve(url);
-      reader.readAsDataURL(blob);
-    });
-  } catch (err) {
-    console.warn(`[Base64 Conversion Failed] ${url}:`, err.message);
-    return url; // Fallback to original URL
+      return await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = () => resolve(url);
+        reader.readAsDataURL(blob);
+      });
+    } catch (err) {
+      console.warn(`[Base64 Attempt ${attempt}/${maxRetries} Failed] ${url}:`, err.message);
+      if (attempt < maxRetries) {
+        // Exponential backoff wait (500ms, 1000ms...)
+        await new Promise(r => setTimeout(r, attempt * 500));
+      }
+    }
   }
+  console.error(`[Base64 Failed After ${maxRetries} Retries] Falling back to URL:`, url);
+  return url;
 }
 
 async function processMessageImages(messages, concurrency = 8) {
@@ -216,24 +225,32 @@ async function exportZIP(data, filename, concurrency = 8) {
 
   const uniqueList = Array.from(uniqueImgMap.values());
 
-  // Concurrent download batches
+  // Concurrent download batches with retry
   for (let i = 0; i < uniqueList.length; i += concurrency) {
     const batch = uniqueList.slice(i, i + concurrency);
     await Promise.all(batch.map(async (item) => {
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 8000);
-        const response = await fetch(item.originalSrc, { signal: controller.signal });
-        clearTimeout(timer);
+      let attempt = 0;
+      let downloadedBlob = null;
+      while (attempt < 3 && !downloadedBlob) {
+        attempt++;
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 8000);
+          const response = await fetch(item.originalSrc, { signal: controller.signal });
+          clearTimeout(timer);
 
-        if (response.ok) {
-          const blob = await response.blob();
-          const ext = blob.type.split('/')[1] || 'jpg';
-          const filename = `${item.localPath}.${ext}`.replace('images/', '');
-          item.finalRelativePath = `images/${filename}`;
-          imgFolder.file(filename, blob);
+          if (response.ok) {
+            downloadedBlob = await response.blob();
+            const ext = downloadedBlob.type.split('/')[1] || 'jpg';
+            const filename = `${item.localPath}.${ext}`.replace('images/', '');
+            item.finalRelativePath = `images/${filename}`;
+            imgFolder.file(filename, downloadedBlob);
+          }
+        } catch (e) {
+          if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 500));
         }
-      } catch (e) {
+      }
+      if (!downloadedBlob) {
         item.finalRelativePath = item.originalSrc;
       }
     }));

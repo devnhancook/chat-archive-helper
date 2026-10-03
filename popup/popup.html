@@ -47,6 +47,17 @@
     </div>
 
     <div class="form-group">
+      <label class="form-label">Message Limit (Phase)</label>
+      <select id="message-limit" class="form-select">
+        <option value="500">500 Messages (Quick Archive)</option>
+        <option value="1000">1,000 Messages (Phase 1)</option>
+        <option value="2500">2,500 Messages (Phase 2)</option>
+        <option value="5000">5,000 Messages (Deep Archive)</option>
+        <option value="0" selected>All (Unlimited Full History)</option>
+      </select>
+    </div>
+
+    <div class="form-group">
       <label class="form-label">Export Format</label>
       <select id="export-format" class="form-select">
         <option value="html" selected>🌐 Offline HTML (Embedded Base64 Photos)</option>
