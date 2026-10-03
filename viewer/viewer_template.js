@@ -356,20 +356,30 @@ function generateOfflineHTML(data) {
           row.appendChild(audioDiv);
         }
 
-        if (msg.files && msg.files.length > 0) {
-          const filesDiv = document.createElement('div');
-          filesDiv.className = 'msg-files';
-          msg.files.forEach(f => {
-            const a = document.createElement('a');
-            a.className = 'file-attach-btn';
-            a.href = f.url;
-            a.target = '_blank';
-            a.rel = 'noreferrer';
-            a.innerText = '📎 ' + f.name;
-            filesDiv.appendChild(a);
-          });
-          row.appendChild(filesDiv);
-        }
+    function isSafeUrl(url) {
+      if (!url) return false;
+      try {
+        const parsed = new URL(url, window.location.href);
+        return parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'data:';
+      } catch (e) {
+        return false;
+      }
+    }
+
+    if (msg.files && msg.files.length > 0) {
+      const filesDiv = document.createElement('div');
+      filesDiv.className = 'msg-files';
+      msg.files.forEach(f => {
+        const a = document.createElement('a');
+        a.className = 'file-attach-btn';
+        a.href = isSafeUrl(f.url) ? f.url : '#';
+        a.target = '_blank';
+        a.rel = 'noreferrer noopener';
+        a.innerText = '📎 ' + f.name;
+        filesDiv.appendChild(a);
+      });
+      row.appendChild(filesDiv);
+    }
 
         if (msg.timestamp) {
           const timeDiv = document.createElement('div');

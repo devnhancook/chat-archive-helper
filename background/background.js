@@ -37,12 +37,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   return true;
 });
 
+let keepAliveInterval = null;
+
+function startKeepAlive() {
+  if (keepAliveInterval) return;
+  keepAliveInterval = setInterval(() => {
+    chrome.runtime.getPlatformInfo(() => {});
+  }, 20000);
+}
+
+function stopKeepAlive() {
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+    keepAliveInterval = null;
+  }
+}
+
 async function handleExport(data, config) {
   const sanitizeTitle = (data.title || 'Chat_Archive').replace(/[^a-zA-Z0-9_-]/g, '_');
   const timestampStr = new Date().toISOString().slice(0, 10);
   const baseFilename = `Archive_${sanitizeTitle}_${timestampStr}`;
 
   console.log(`[Export] Starting export for ${data.messages.length} messages. Format: ${config.format}`);
+  startKeepAlive();
 
   try {
     if (config.format === 'json') {
@@ -54,8 +71,20 @@ async function handleExport(data, config) {
     } else if (config.format === 'zip') {
       await exportZIP(data, `${baseFilename}.zip`);
     }
+
+    chrome.runtime.sendMessage({
+      type: 'MCE_STATUS_UPDATE',
+      data: {
+        isExtracting: false,
+        isPaused: false,
+        msgCount: data.messages.length,
+        statusMsg: `✅ Export complete! File saved in your Downloads folder.`
+      }
+    }).catch(() => {});
   } catch (err) {
     console.error('[Export Error]', err);
+  } finally {
+    stopKeepAlive();
   }
 }
 

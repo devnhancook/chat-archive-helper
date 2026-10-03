@@ -70,8 +70,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       dualControls.style.display = 'none';
       if (state.statusMsg) {
         statusFooter.innerText = state.statusMsg;
+        if (state.statusMsg.includes('✅') || state.statusMsg.includes('complete')) {
+          statusFooter.style.color = '#34d399';
+          statusFooter.style.fontWeight = '600';
+        } else {
+          statusFooter.style.color = '';
+          statusFooter.style.fontWeight = '';
+        }
       } else if (state.msgCount > 0) {
         statusFooter.innerText = `Captured ${state.msgCount} messages. Click Start to resume or Export.`;
+        statusFooter.style.color = '';
+        statusFooter.style.fontWeight = '';
       }
     }
   }
