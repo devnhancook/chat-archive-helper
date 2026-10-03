@@ -64,7 +64,7 @@ async function convertURLToBase64(url, timeoutMs = 8000) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    const response = await fetch(url, { mode: 'cors', signal: controller.signal });
+    const response = await fetch(url, { signal: controller.signal });
     clearTimeout(timer);
 
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -82,26 +82,40 @@ async function convertURLToBase64(url, timeoutMs = 8000) {
   }
 }
 
-async function processMessageImages(messages) {
-  const processed = [];
-  const total = messages.length;
-
-  for (let i = 0; i < total; i++) {
-    const msg = messages[i];
-    const copyMsg = { ...msg, images: [] };
-
+async function processMessageImages(messages, concurrency = 8) {
+  // Collect all unique image URLs to download concurrently
+  const uniqueUrls = new Set();
+  messages.forEach(msg => {
     if (msg.images && msg.images.length > 0) {
-      for (let img of msg.images) {
-        const dataUrl = await convertURLToBase64(img.src);
-        copyMsg.images.push({
-          ...img,
-          dataUrl: dataUrl
-        });
-      }
+      msg.images.forEach(img => {
+        if (img.src) uniqueUrls.add(img.src);
+      });
     }
-    processed.push(copyMsg);
+  });
+
+  const urlArray = Array.from(uniqueUrls);
+  const cacheMap = new Map();
+
+  // Process in concurrent batches
+  for (let i = 0; i < urlArray.length; i += concurrency) {
+    const batch = urlArray.slice(i, i + concurrency);
+    const results = await Promise.all(batch.map(url => convertURLToBase64(url, 8000)));
+    batch.forEach((url, idx) => {
+      cacheMap.set(url, results[idx]);
+    });
   }
-  return processed;
+
+  // Map cached base64 data back to messages
+  return messages.map(msg => {
+    const copyMsg = { ...msg, images: [] };
+    if (msg.images && msg.images.length > 0) {
+      copyMsg.images = msg.images.map(img => ({
+        ...img,
+        dataUrl: cacheMap.get(img.src) || img.src
+      }));
+    }
+    return copyMsg;
+  });
 }
 
 async function exportHTML(data, filename, embedImages = true) {
@@ -167,44 +181,65 @@ function exportTXT(data, filename) {
   reader.readAsDataURL(blob);
 }
 
-async function exportZIP(data, filename) {
+async function exportZIP(data, filename, concurrency = 8) {
   const zip = new JSZip();
   const imgFolder = zip.folder('images');
 
-  const processedMessages = [];
-  let imgIndex = 1;
+  // Collect unique images
+  const uniqueImgMap = new Map();
+  let imgCount = 1;
+  data.messages.forEach(msg => {
+    if (msg.images && msg.images.length > 0) {
+      msg.images.forEach(img => {
+        if (img.src && !uniqueImgMap.has(img.src)) {
+          uniqueImgMap.set(img.src, {
+            originalSrc: img.src,
+            localPath: `images/img_${imgCount++}`
+          });
+        }
+      });
+    }
+  });
 
-  for (let msg of data.messages) {
+  const uniqueList = Array.from(uniqueImgMap.values());
+
+  // Concurrent download batches
+  for (let i = 0; i < uniqueList.length; i += concurrency) {
+    const batch = uniqueList.slice(i, i + concurrency);
+    await Promise.all(batch.map(async (item) => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        const response = await fetch(item.originalSrc, { signal: controller.signal });
+        clearTimeout(timer);
+
+        if (response.ok) {
+          const blob = await response.blob();
+          const ext = blob.type.split('/')[1] || 'jpg';
+          const filename = `${item.localPath}.${ext}`.replace('images/', '');
+          item.finalRelativePath = `images/${filename}`;
+          imgFolder.file(filename, blob);
+        }
+      } catch (e) {
+        item.finalRelativePath = item.originalSrc;
+      }
+    }));
+  }
+
+  // Remap processed messages
+  const processedMessages = data.messages.map(msg => {
     const copyMsg = { ...msg, images: [] };
     if (msg.images && msg.images.length > 0) {
-      for (let img of msg.images) {
-        try {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 8000);
-          const response = await fetch(img.src, { signal: controller.signal });
-          clearTimeout(timer);
-
-          if (response.ok) {
-            const blob = await response.blob();
-            const ext = blob.type.split('/')[1] || 'jpg';
-            const imgFilename = `img_${imgIndex++}.${ext}`;
-            
-            imgFolder.file(imgFilename, blob);
-
-            copyMsg.images.push({
-              ...img,
-              src: `images/${imgFilename}`
-            });
-          } else {
-            copyMsg.images.push(img);
-          }
-        } catch (e) {
-          copyMsg.images.push(img);
-        }
-      }
+      copyMsg.images = msg.images.map(img => {
+        const cached = uniqueImgMap.get(img.src);
+        return {
+          ...img,
+          src: cached && cached.finalRelativePath ? cached.finalRelativePath : img.src
+        };
+      });
     }
-    processedMessages.push(copyMsg);
-  }
+    return copyMsg;
+  });
 
   const zipData = { ...data, messages: processedMessages };
   zip.file('chat.json', JSON.stringify(zipData, null, 2));

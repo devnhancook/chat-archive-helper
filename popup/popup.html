@@ -38,6 +38,15 @@
     </div>
 
     <div class="form-group">
+      <label class="form-label">Scroll & Capture Speed</label>
+      <select id="scroll-speed" class="form-select">
+        <option value="turbo" selected>⚡ Turbo Mode (5x - Instant Batch Jump)</option>
+        <option value="fast">🚀 Fast Mode (2.5x - Quick Fetch)</option>
+        <option value="normal">🐢 Normal Mode (1x - Safe & Steady)</option>
+      </select>
+    </div>
+
+    <div class="form-group">
       <label class="form-label">Export Format</label>
       <select id="export-format" class="form-select">
         <option value="html" selected>🌐 Offline HTML (Embedded Base64 Photos)</option>
@@ -64,6 +73,10 @@
         <button class="btn btn-secondary" id="btn-pause">Pause</button>
         <button class="btn btn-success" id="btn-export">Export Now</button>
       </div>
+
+      <button class="btn btn-secondary" id="btn-reset" style="margin-top: 6px; font-size: 11px; padding: 6px;">
+        🔄 Reset Session (Clear Cached Msgs)
+      </button>
     </div>
 
     <div class="status-footer" id="status-footer">

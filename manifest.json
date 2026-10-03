@@ -11,7 +11,9 @@
   ],
   "host_permissions": [
     "https://www.messenger.com/*",
-    "https://www.facebook.com/*"
+    "https://www.facebook.com/*",
+    "https://*.fbcdn.net/*",
+    "https://*.cdninstagram.com/*"
   ],
   "background": {
     "service_worker": "background/background.js"
@@ -36,7 +38,6 @@
         "https://www.facebook.com/messages/*"
       ],
       "js": ["content/content.js"],
-      "css": ["content/content.css"],
       "run_at": "document_idle"
     }
   ],

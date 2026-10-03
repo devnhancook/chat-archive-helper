@@ -1,188 +1,100 @@
-// Chat Archive Helper - Production Content Script
+// Chat Archive Helper - Production Content Script (Zero HUD / Clean Extension Controlled)
 (function () {
   if (window.__MCE_INITIALIZED__) return;
   window.__MCE_INITIALIZED__ = true;
 
-  console.log('[Chat Archive Helper] Content script active.');
+  console.log('[Chat Archive Helper] Content script initialized without in-page HUD.');
 
   let isExtracting = false;
   let isPaused = false;
   let scrollContainer = null;
-  let capturedMessagesMap = new Map();
   let scrollTimer = null;
   let idleCount = 0;
-  let conversationTitle = 'Chat Conversation';
+  let scrollSpeedMode = 'turbo'; // 'turbo' | 'fast' | 'normal'
+  let conversationTitle = 'Messenger Chat';
 
-  // Shadow DOM Host & HUD elements
-  let hudHost = null;
-  let hudShadow = null;
-  let hudOverlay = null;
+  // Master chronological storage (Strictly: index 0 = Oldest, index N-1 = Newest)
+  let capturedMessages = [];
+  let capturedSignatures = new Set();
+  let domObserver = null;
+  let lastKnownIncomingSender = 'Friend';
 
-  function initHUD() {
-    if (document.getElementById('mce-hud-root')) {
-      hudHost = document.getElementById('mce-hud-root');
-      hudOverlay = hudShadow.querySelector('#mce-hud-overlay');
-      return;
-    }
-
-    hudHost = document.createElement('div');
-    hudHost.id = 'mce-hud-root';
-    hudShadow = hudHost.attachShadow({ mode: 'open' });
-
-    // Inject Shadow CSS
-    const styleEl = document.createElement('style');
-    styleEl.textContent = `
-      #mce-hud-overlay {
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        z-index: 2147483647;
-        width: 320px;
-        background: rgba(15, 23, 42, 0.94);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 16px;
-        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), 0 0 20px rgba(0, 132, 255, 0.2);
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-        color: #f8fafc;
-        padding: 16px;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        opacity: 0;
-        transform: translateY(-10px) scale(0.98);
-        pointer-events: none;
-      }
-      #mce-hud-overlay.mce-visible {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-        pointer-events: auto;
-      }
-      .mce-hud-header {
-        display: flex; align-items: center; justify-content: space-between;
-        margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-      }
-      .mce-hud-title {
-        display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px;
-        background: linear-gradient(135deg, #0084ff, #a855f7);
-        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      }
-      .mce-hud-badge {
-        font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 20px;
-        background: rgba(0, 132, 255, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);
-      }
-      .mce-hud-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
-      .mce-stat-card {
-        background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 10px; padding: 8px 10px; text-align: center;
-      }
-      .mce-stat-val { font-size: 18px; font-weight: 700; color: #38bdf8; }
-      .mce-stat-label { font-size: 11px; color: #94a3b8; margin-top: 2px; }
-      .mce-hud-controls { display: flex; gap: 8px; }
-      .mce-btn {
-        flex: 1; padding: 8px 12px; border-radius: 8px; border: none; font-size: 12px; font-weight: 600;
-        cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.2s ease;
-      }
-      .mce-btn-secondary { background: rgba(255, 255, 255, 0.1); color: #f1f5f9; border: 1px solid rgba(255, 255, 255, 0.15); }
-      .mce-btn-danger { background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.3); }
-      .mce-status-text { font-size: 11px; color: #a1a1aa; text-align: center; margin-top: 8px; }
-    `;
-    hudShadow.appendChild(styleEl);
-
-    hudOverlay = document.createElement('div');
-    hudOverlay.id = 'mce-hud-overlay';
-    hudOverlay.innerHTML = `
-      <div class="mce-hud-header">
-        <div class="mce-hud-title">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-          </svg>
-          Chat Archive Helper
-        </div>
-        <span class="mce-hud-badge" id="mce-hud-status-badge">READY</span>
-      </div>
-
-      <div class="mce-hud-stats">
-        <div class="mce-stat-card">
-          <div class="mce-stat-val" id="mce-count-msg">0</div>
-          <div class="mce-stat-label">Messages</div>
-        </div>
-        <div class="mce-stat-card">
-          <div class="mce-stat-val" id="mce-count-img">0</div>
-          <div class="mce-stat-label">Photos & Media</div>
-        </div>
-      </div>
-
-      <div class="mce-hud-controls">
-        <button class="mce-btn mce-btn-secondary" id="mce-btn-pause">Pause</button>
-        <button class="mce-btn mce-btn-danger" id="mce-btn-stop">Finish & Export</button>
-      </div>
-
-      <div class="mce-status-text" id="mce-status-text">Click "Start Auto-Scroll" in popup to begin</div>
-    `;
-
-    hudShadow.appendChild(hudOverlay);
-    document.body.appendChild(hudHost);
-
-    hudShadow.querySelector('#mce-btn-pause').addEventListener('click', togglePause);
-    hudShadow.querySelector('#mce-btn-stop').addEventListener('click', stopExtraction);
-  }
-
-  function showHUD() {
-    initHUD();
-    hudOverlay.classList.add('mce-visible');
-  }
-
-  function updateHUD(statusMsg, badgeText = 'SCROLLING') {
-    if (!hudOverlay) return;
-    hudShadow.querySelector('#mce-count-msg').innerText = capturedMessagesMap.size;
-    
+  function broadcastStatus(statusMsg = '') {
     let totalImages = 0;
-    capturedMessagesMap.forEach(msg => {
+    capturedMessages.forEach(msg => {
       totalImages += (msg.images ? msg.images.length : 0);
     });
-    hudShadow.querySelector('#mce-count-img').innerText = totalImages;
 
-    if (statusMsg) {
-      hudShadow.querySelector('#mce-status-text').innerText = statusMsg;
-    }
-    if (badgeText) {
-      hudShadow.querySelector('#mce-hud-status-badge').innerText = badgeText;
-    }
+    const state = {
+      isExtracting,
+      isPaused,
+      msgCount: capturedMessages.length,
+      imgCount: totalImages,
+      statusMsg,
+      conversationTitle: detectConversationTitle()
+    };
 
+    // Save to storage for persistent popup reopen
+    chrome.storage.local.set({ mceCurrentState: state });
+
+    // Broadcast live to popup if open
     chrome.runtime.sendMessage({
       type: 'MCE_STATUS_UPDATE',
-      data: {
-        isExtracting,
-        isPaused,
-        msgCount: capturedMessagesMap.size,
-        imgCount: totalImages,
-        statusMsg,
-        conversationTitle
-      }
+      data: state
     }).catch(() => {});
   }
 
+  function detectConversationTitle() {
+    const mainElem = getMainChatElement();
+    if (mainElem) {
+      const titleHeader = mainElem.querySelector('h1, h2, [role="header"]');
+      if (titleHeader && titleHeader.innerText) {
+        const txt = titleHeader.innerText.trim();
+        if (txt && !txt.includes('Messenger') && !txt.includes('Chats') && !txt.includes('Cuộc trò chuyện')) {
+          return txt;
+        }
+      }
+    }
+    const docTitle = document.title.replace(' | Facebook', '').replace('Messenger', '').trim();
+    return docTitle || 'Messenger Chat';
+  }
+
   function getMainChatElement() {
-    return document.querySelector('div[aria-label*="Messages in conversation"]') ||
+    return document.querySelector('div[role="grid"]') ||
+           document.querySelector('div[aria-label*="Messages in conversation"]') ||
            document.querySelector('div[aria-label*="Tin nhắn trong cuộc trò chuyện"]') ||
            document.querySelector('div[role="main"]') ||
-           document.querySelector('[data-pagelet="Messages"]');
+           document.querySelector('[data-pagelet="Messages"]') ||
+           document.body;
   }
 
   function findScrollContainer() {
-    const mainElem = getMainChatElement();
-    const root = mainElem || document.body;
+    // 1. Try finding scrollable parent of role="grid" or message list
+    const specificContainer = document.querySelector('div[role="grid"]') ||
+                              document.querySelector('div[aria-label*="Messages in conversation"]') ||
+                              document.querySelector('div[aria-label*="Tin nhắn trong cuộc trò chuyện"]');
+    
+    if (specificContainer) {
+      let current = specificContainer;
+      while (current && current !== document.body) {
+        const style = window.getComputedStyle(current);
+        if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && current.scrollHeight > current.clientHeight) {
+          return current;
+        }
+        current = current.parentElement;
+      }
+    }
 
-    const scrollables = root.querySelectorAll('div');
+    // 2. Scan all scrollables on page (exclude navigation / thread info sidebars)
+    const allDivs = document.querySelectorAll('div');
     let bestDiv = null;
     let maxScrollHeight = 0;
 
-    for (let div of scrollables) {
+    for (let div of allDivs) {
       if (div.closest('[role="navigation"]') || 
           div.closest('[aria-label*="Chats"]') || 
           div.closest('[aria-label*="Cuộc trò chuyện"]') ||
-          div.closest('[aria-label*="Thread information"]') ||
-          div.closest('[aria-label*="Thông tin về cuộc trò chuyện"]')) {
+          div.closest('[aria-label*="Thread information"]')) {
         continue;
       }
 
@@ -195,30 +107,119 @@
       }
     }
 
-    return bestDiv || mainElem || document.documentElement;
+    return bestDiv || document.querySelector('div[role="main"]') || document.documentElement;
   }
 
-  function detectConversationTitle() {
-    const mainElem = getMainChatElement();
-    if (mainElem) {
-      const titleHeader = mainElem.querySelector('h1, h2, [role="header"]');
-      if (titleHeader && titleHeader.innerText) {
-        const txt = titleHeader.innerText.trim();
-        if (txt && !txt.includes('Messenger') && !txt.includes('Chats')) {
-          return txt;
-        }
+  function getHighResImageSrc(img) {
+    // Check srcset first for highest resolution image
+    if (img.srcset) {
+      const candidates = img.srcset.split(',').map(s => {
+        const parts = s.trim().split(/\s+/);
+        return parts[0];
+      }).filter(Boolean);
+      if (candidates.length > 0) {
+        return candidates[candidates.length - 1];
       }
     }
-    return document.title.replace(' | Facebook', '').replace('Messenger', '').trim() || 'Messenger Chat';
+
+    // Check parent anchor for direct photo view
+    const parentLink = img.closest('a');
+    if (parentLink && parentLink.href && parentLink.href.includes('fbcdn.net')) {
+      return parentLink.href;
+    }
+
+    return img.currentSrc || img.src;
+  }
+
+  function isAvatarOrIcon(img) {
+    const src = img.src || '';
+    if (!src) return true;
+
+    // Filter static UI icons & standard emojis
+    if (src.includes('rsrc.php') || src.includes('emoji.php') || src.includes('static.xx.fbcdn.net/rsrc')) {
+      return true;
+    }
+
+    // Check alt text
+    const alt = (img.alt || '').toLowerCase();
+    if (alt.includes('profile picture') || alt.includes('ảnh đại diện') || alt.includes('avatar')) {
+      return true;
+    }
+
+    // Check small dimensions (avatar badge)
+    const w = img.naturalWidth || img.width || 0;
+    const h = img.naturalHeight || img.height || 0;
+    if (w > 0 && h > 0 && w <= 36 && h <= 36) {
+      return true;
+    }
+
+    // Check rounded avatar wrapper
+    const computed = window.getComputedStyle(img);
+    if (computed.borderRadius === '50%' && (w <= 44 || h <= 44)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function extractImagesFromElement(element) {
+    const images = [];
+    const imgElements = element.querySelectorAll('img');
+
+    imgElements.forEach(img => {
+      if (isAvatarOrIcon(img)) return;
+
+      const src = img.src || '';
+      // Valid Facebook CDN photo patterns
+      const isFbCdn = src.includes('fbcdn.net') || 
+                      src.includes('scontent') || 
+                      src.includes('cdninstagram.com') ||
+                      src.startsWith('blob:');
+
+      if (isFbCdn) {
+        const highResSrc = getHighResImageSrc(img);
+        const w = img.naturalWidth || img.width || 200;
+        const h = img.naturalHeight || img.height || 200;
+
+        images.push({
+          src: highResSrc,
+          alt: img.alt || 'Photo Attachment',
+          width: w,
+          height: h
+        });
+      }
+    });
+
+    // Check CSS background-image
+    element.querySelectorAll('div[style*="background-image"]').forEach(bgEl => {
+      const bgStyle = bgEl.style.backgroundImage || '';
+      const match = bgStyle.match(/url\(["']?(https:\/\/[^"']*(?:fbcdn\.net|scontent)[^"']*)["']?\)/i);
+      if (match && match[1] && !match[1].includes('rsrc.php')) {
+        images.push({
+          src: match[1],
+          alt: 'Photo Background',
+          width: 200,
+          height: 200
+        });
+      }
+    });
+
+    return images;
   }
 
   function extractCurrentDOMMessages() {
     conversationTitle = detectConversationTitle();
     const container = scrollContainer || getMainChatElement() || document.body;
 
-    const rowElements = container.querySelectorAll('div[role="row"], div[aria-label*="Message"], div[aria-label*="Tin nhắn"]');
+    // Comprehensive selector covering all message bubble formats in Messenger Comet
+    const rowElements = container.querySelectorAll(
+      'div[role="row"], div[role="gridcell"], div[aria-label*="Message"], div[aria-label*="Tin nhắn"], div[aria-label*="Photo"], div[aria-label*="Ảnh"], div[data-scope="messages_table"]'
+    );
 
-    rowElements.forEach((row) => {
+    const frameMessages = [];
+
+    rowElements.forEach((row, rowIndex) => {
+      // Exclude left sidebar / thread header navigation
       if (row.closest('[role="navigation"]') || 
           row.closest('[aria-label*="Chats"]') || 
           row.closest('[aria-label*="Cuộc trò chuyện"]') ||
@@ -226,47 +227,38 @@
         return;
       }
 
+      // 1. Text extraction
       const textNode = row.querySelector('div[dir="auto"]') || row.querySelector('span[dir="auto"]');
       const text = textNode ? textNode.innerText.trim() : '';
 
-      if (!textNode && row.innerText && row.innerText.length > 300) {
+      // Skip non-message giant containers
+      if (!textNode && row.innerText && row.innerText.length > 500) {
         return;
       }
 
-      const images = [];
-      row.querySelectorAll('img').forEach(img => {
-        const src = img.src;
-        if (src && !src.includes('rsrc.php') && !src.includes('emoji.php') && !src.includes('static.xx.fbcdn.net/rsrc')) {
-          const w = img.naturalWidth || img.width || 100;
-          const h = img.naturalHeight || img.height || 100;
-          if ((w > 40 && h > 40) || src.includes('scontent') || src.includes('fbcdn.net/v/')) {
-            images.push({
-              src: getHighResImageSrc(img),
-              alt: img.alt || 'Photo Attachment',
-              width: w,
-              height: h
-            });
-          }
-        }
-      });
+      // 2. Photos & Media
+      const images = extractImagesFromElement(row);
 
+      // 3. Videos
       const videos = [];
       row.querySelectorAll('video').forEach(v => {
         if (v.src) videos.push(v.src);
       });
 
+      // 4. Stickers
       const stickers = [];
       row.querySelectorAll('img[src*="sticker"]').forEach(s => {
         if (s.src) stickers.push(s.src);
       });
 
+      // 5. Timestamp
       let timestamp = '';
       const timeElem = row.querySelector('span[title], div[title], time, [data-scope="date_time"]');
       if (timeElem) {
-        timestamp = timeElem.getAttribute('title') || timeElem.innerText;
+        timestamp = timeElem.getAttribute('title') || timeElem.innerText.trim();
       }
 
-      // Multi-language Outgoing Detection
+      // 6. Sender & Outgoing Detection
       let sender = 'Other';
       const ariaLabel = (row.getAttribute('aria-label') || '').toLowerCase();
       const isOutgoing = ariaLabel.includes('you sent') ||
@@ -279,93 +271,140 @@
       if (isOutgoing) {
         sender = 'You';
       } else {
-        const senderElem = row.querySelector('h2, span[aria-hidden="false"]');
-        if (senderElem && senderElem.innerText) {
+        const senderElem = row.querySelector('h2, h3, h4, span[aria-hidden="false"]');
+        if (senderElem && senderElem.innerText && senderElem.innerText.trim().length > 0 && senderElem.innerText.trim().length < 40) {
           sender = senderElem.innerText.trim();
+          lastKnownIncomingSender = sender;
+        } else {
+          sender = lastKnownIncomingSender || conversationTitle || 'Other';
         }
       }
 
+      // Valid message condition: must contain text OR images OR videos OR stickers
       if (text || images.length > 0 || videos.length > 0 || stickers.length > 0) {
-        // Robust Hash Deduping
-        const imgHash = images.map(i => i.src.split('?')[0]).join('|');
-        const msgHash = `${sender}_${text.length}_${text.slice(0, 50)}_${timestamp}_${imgHash}`;
-        
-        if (!capturedMessagesMap.has(msgHash)) {
-          capturedMessagesMap.set(msgHash, {
-            id: 'msg_' + Math.random().toString(36).substr(2, 9),
-            sender,
-            text,
-            timestamp: timestamp || new Date().toLocaleTimeString(),
-            images,
-            videos,
-            stickers,
-            isOutgoing: sender === 'You'
-          });
+        // Tag DOM element with unique ID to avoid re-extraction in same node
+        let elemId = row.__mce_id__;
+        if (!elemId) {
+          elemId = 'mid_' + Math.random().toString(36).substr(2, 9);
+          row.__mce_id__ = elemId;
         }
+
+        const imgHash = images.map(i => i.src.split('?')[0]).join('|');
+        // Composite signature: sender + text length + text snippet + imgHash + timestamp
+        const signature = `${sender}__${text}__${imgHash}__${timestamp}`;
+
+        frameMessages.push({
+          id: elemId,
+          signature,
+          sender,
+          text,
+          timestamp: timestamp || new Date().toLocaleTimeString(),
+          images,
+          videos,
+          stickers,
+          isOutgoing: sender === 'You',
+          captureTime: Date.now()
+        });
       }
     });
+
+    if (frameMessages.length === 0) return;
+
+    // Merge frame messages into capturedMessages in STRICT CHRONOLOGICAL ORDER
+    if (capturedMessages.length === 0) {
+      // First batch: frame messages are Top (Oldest) to Bottom (Newest)
+      frameMessages.forEach(msg => {
+        if (!capturedSignatures.has(msg.signature)) {
+          capturedSignatures.add(msg.signature);
+          capturedMessages.push(msg);
+        }
+      });
+    } else {
+      // Subsequent scroll-up batches: older messages appear at top of DOM.
+      // Filter out messages that already exist in capturedSignatures.
+      const newOlderMessages = [];
+      frameMessages.forEach(msg => {
+        if (!capturedSignatures.has(msg.signature)) {
+          capturedSignatures.add(msg.signature);
+          newOlderMessages.push(msg);
+        }
+      });
+
+      if (newOlderMessages.length > 0) {
+        // Prepend older messages so they stay at the TOP (Oldest first)
+        capturedMessages = [...newOlderMessages, ...capturedMessages];
+      }
+    }
   }
 
-  function getHighResImageSrc(img) {
-    const parentLink = img.closest('a');
-    if (parentLink && parentLink.href && parentLink.href.includes('fbcdn.net')) {
-      return parentLink.href;
+  function getScrollInterval() {
+    switch (scrollSpeedMode) {
+      case 'turbo': return 450;
+      case 'fast': return 750;
+      default: return 1200;
     }
-    return img.src;
   }
 
   function scrollStep() {
     if (!isExtracting || isPaused) return;
 
     scrollContainer = findScrollContainer();
-    const prevMsgCount = capturedMessagesMap.size;
+    const prevCount = capturedMessages.length;
 
     extractCurrentDOMMessages();
+    const newCount = capturedMessages.length;
 
-    const newMsgCount = capturedMessagesMap.size;
-
+    // Scroll up
     if (scrollContainer && scrollContainer !== document.documentElement) {
       scrollContainer.scrollTop = 0;
-      scrollContainer.scrollBy({ top: -300, behavior: 'smooth' });
+      const wheelEvent = new WheelEvent('wheel', {
+        deltaY: -1000,
+        bubbles: true,
+        cancelable: true
+      });
+      scrollContainer.dispatchEvent(wheelEvent);
+      scrollContainer.dispatchEvent(new Event('scroll', { bubbles: true }));
+    } else {
+      window.scrollTo(0, 0);
+      window.dispatchEvent(new WheelEvent('wheel', { deltaY: -1000, bubbles: true }));
     }
 
-    if (newMsgCount === prevMsgCount) {
+    if (newCount === prevCount) {
       idleCount++;
-      updateHUD(`Loading history... (Attempt ${idleCount}/6)`, 'LOADING');
-      if (idleCount >= 6) {
+      broadcastStatus(`Loading older history... (${idleCount}/20)`);
+      if (idleCount >= 20) {
         stopExtraction();
-        updateHUD('Reached top of chat history!', 'FINISHED');
+        broadcastStatus('Reached top of chat history! Exporting...');
         return;
       }
     } else {
       idleCount = 0;
-      updateHUD(`Extracted ${capturedMessagesMap.size} messages...`, 'SCROLLING');
+      broadcastStatus(`Capturing: ${capturedMessages.length} messages...`);
     }
 
-    scrollTimer = setTimeout(scrollStep, 1800);
+    scrollTimer = setTimeout(scrollStep, getScrollInterval());
   }
 
-  function startExtraction() {
+  function startExtraction(speed = 'turbo') {
     if (isExtracting) return;
+    scrollSpeedMode = speed || 'turbo';
     isExtracting = true;
     isPaused = false;
     idleCount = 0;
-    showHUD();
-    updateHUD('Started auto-scroll...', 'SCROLLING');
+
+    initMutationObserver();
+    broadcastStatus(`Started auto-scroll (${scrollSpeedMode.toUpperCase()})...`);
     scrollStep();
   }
 
   function togglePause() {
     if (!isExtracting) return;
     isPaused = !isPaused;
-    const btn = hudShadow.querySelector('#mce-btn-pause');
     if (isPaused) {
       if (scrollTimer) clearTimeout(scrollTimer);
-      if (btn) btn.innerText = 'Resume';
-      updateHUD('Extraction paused', 'PAUSED');
+      broadcastStatus('Extraction paused.');
     } else {
-      if (btn) btn.innerText = 'Pause';
-      updateHUD('Resuming auto-scroll...', 'SCROLLING');
+      broadcastStatus('Resuming auto-scroll...');
       scrollStep();
     }
   }
@@ -374,45 +413,71 @@
     isExtracting = false;
     isPaused = false;
     if (scrollTimer) clearTimeout(scrollTimer);
+    if (domObserver) {
+      domObserver.disconnect();
+      domObserver = null;
+    }
 
     extractCurrentDOMMessages();
-    updateHUD('Completed capture. Preparing export...', 'EXPORTING');
+    broadcastStatus('Extraction completed. Finalizing export...');
 
-    const messages = Array.from(capturedMessagesMap.values());
-
+    // capturedMessages is ALREADY strictly sorted: index 0 = Oldest, index N-1 = Newest!
+    // No .reverse() needed!
     chrome.runtime.sendMessage({
       type: 'MCE_EXTRACTION_COMPLETE',
       data: {
         title: conversationTitle,
-        messages: messages,
+        messages: capturedMessages,
         exportedAt: new Date().toISOString()
       }
     });
 
     setTimeout(() => {
-      updateHUD('Export ready! Check downloads.', 'DONE');
+      broadcastStatus('Export ready! Check your Downloads folder.');
     }, 1200);
   }
 
+  function initMutationObserver() {
+    if (domObserver) return;
+    const targetNode = getMainChatElement() || document.body;
+    domObserver = new MutationObserver(() => {
+      if (isExtracting && !isPaused) {
+        extractCurrentDOMMessages();
+      }
+    });
+    domObserver.observe(targetNode, { childList: true, subtree: true });
+  }
+
+  // Communication API with Extension Popup
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'MCE_START') {
-      startExtraction();
+      startExtraction(request.speed || 'turbo');
       sendResponse({ status: 'STARTED' });
+    } else if (request.type === 'MCE_SET_SPEED') {
+      scrollSpeedMode = request.speed || 'turbo';
+      broadcastStatus(`Speed set to ${scrollSpeedMode.toUpperCase()}`);
+      sendResponse({ status: 'OK' });
     } else if (request.type === 'MCE_PAUSE') {
       togglePause();
-      sendResponse({ status: 'TOGGLED' });
+      sendResponse({ status: isPaused ? 'PAUSED' : 'RESUMED' });
     } else if (request.type === 'MCE_STOP') {
       stopExtraction();
       sendResponse({ status: 'STOPPED' });
+    } else if (request.type === 'MCE_RESET') {
+      capturedMessages = [];
+      capturedSignatures.clear();
+      idleCount = 0;
+      broadcastStatus('Session reset. Ready.');
+      sendResponse({ status: 'RESET' });
     } else if (request.type === 'MCE_GET_STATUS') {
       let totalImages = 0;
-      capturedMessagesMap.forEach(msg => {
+      capturedMessages.forEach(msg => {
         totalImages += (msg.images ? msg.images.length : 0);
       });
       sendResponse({
         isExtracting,
         isPaused,
-        msgCount: capturedMessagesMap.size,
+        msgCount: capturedMessages.length,
         imgCount: totalImages,
         conversationTitle: detectConversationTitle()
       });
