@@ -53,7 +53,25 @@ function stopKeepAlive() {
   }
 }
 
+function isAvatarUrl(url) {
+  if (!url) return true;
+  return /\/t\d+\.\d+-1[\/_.]/.test(url) ||
+         /\/v\/t[0-9.]+-1\//.test(url) ||
+         /\/(?:p|s)(?:50|60|100|160|200|320)x\1\//.test(url) ||
+         /stp=c0\.\d+/.test(url) ||
+         /dst-jpg_[sp](?:50|60|100|160|200)x\1/.test(url);
+}
+
 async function handleExport(data, config) {
+  // Sanitize messages: strip any residual avatar images
+  if (data.messages && Array.isArray(data.messages)) {
+    data.messages.forEach(msg => {
+      if (msg.images && msg.images.length > 0) {
+        msg.images = msg.images.filter(img => !isAvatarUrl(img.src));
+      }
+    });
+  }
+
   const sanitizeTitle = (data.title || 'Chat_Archive').replace(/[^a-zA-Z0-9_-]/g, '_');
   const timestampStr = new Date().toISOString().slice(0, 10);
   const baseFilename = `Archive_${sanitizeTitle}_${timestampStr}`;

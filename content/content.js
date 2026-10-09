@@ -146,46 +146,148 @@
     return img.currentSrc || img.src;
   }
 
-  function isAvatarOrIcon(img) {
-    const src = img.src || '';
-    if (!src) return true;
+  function isInsideAvatarContainer(el) {
+    if (!el || typeof el.closest !== 'function') return false;
 
-    // Filter static UI icons & standard emojis
-    if (src.includes('rsrc.php') || src.includes('emoji.php') || src.includes('static.xx.fbcdn.net/rsrc')) {
-      return true;
+    // Check explicit avatar containers
+    const avatarWrapper = el.closest(
+      '[data-scope="author_avatar"], [aria-label*="profile" i], [aria-label*="Profile"], [aria-label*="ảnh đại diện" i], [aria-label*="avatar" i], [data-hovercard*="user"], [data-hovercard*="profile"]'
+    );
+    if (avatarWrapper) return true;
+
+    // Check if inside a profile anchor (not a photo viewer)
+    const anchor = el.closest('a');
+    if (anchor && anchor.href) {
+      const href = anchor.href.toLowerCase();
+      if ((href.includes('facebook.com/') || href.includes('messenger.com/')) &&
+          !href.includes('photo') && !href.includes('media') && !href.includes('fbcdn.net')) {
+        return true;
+      }
     }
 
-    // Check alt text
-    const alt = (img.alt || '').toLowerCase();
-    if (alt.includes('profile picture') || alt.includes('ảnh đại diện') || alt.includes('avatar')) {
-      return true;
-    }
-
-    // Check small dimensions (avatar badge)
-    const w = img.naturalWidth || img.width || 0;
-    const h = img.naturalHeight || img.height || 0;
-    if (w > 0 && h > 0 && w <= 36 && h <= 36) {
-      return true;
-    }
-
-    // Check rounded avatar wrapper
-    const computed = window.getComputedStyle(img);
-    if (computed.borderRadius === '50%' && (w <= 44 || h <= 44)) {
-      return true;
+    // Check if any nearby ancestor has circular 50% border radius and small avatar size
+    let p = el.parentElement;
+    for (let depth = 0; depth < 3 && p && p !== document.body; depth++) {
+      try {
+        const cs = window.getComputedStyle(p);
+        if (cs.borderRadius === '50%' || cs.borderRadius.includes('50%')) {
+          const pw = p.offsetWidth || parseFloat(cs.width) || 0;
+          if (pw > 0 && pw <= 60) return true;
+        }
+      } catch (e) {}
+      p = p.parentElement;
     }
 
     return false;
   }
 
-  function extractImagesFromElement(element) {
-    const images = [];
-    const imgElements = element.querySelectorAll('img');
+  function isAvatarOrIcon(el, customSrc = '', sender = '') {
+    const src = customSrc || el.src || '';
+    if (!src) return true;
 
+    // 1. Static UI icons & standard emojis
+    if (src.includes('rsrc.php') || src.includes('emoji.php') || src.includes('static.xx.fbcdn.net/rsrc') || src.includes('/assets/')) {
+      return true;
+    }
+
+    // 2. Facebook CDN Profile Picture / Avatar URL signatures:
+    // - Type -1 indicator (e.g. t39.30808-1, t1.30497-1, t1.18169-1) denotes user/page avatar
+    // - Standard square avatar resolutions: /p50x50/, /p60x60/, /p100x100/, /s100x100/, /p160x160/, /s160x160/, /p200x200/, /s200x200/, /p320x320/
+    // - Parameter stp=c0.5000 (square avatar crop) or dst-jpg_s100x100 / dst-jpg_p100x100 / dst-jpg_s50x50
+    if (
+      /\/t\d+\.\d+-1[\/_.]/.test(src) ||
+      /\/v\/t[0-9.]+-1\//.test(src) ||
+      /\/(?:p|s)(?:50|60|100|160|200|320)x\1\//.test(src) ||
+      /stp=c0\.\d+/.test(src) ||
+      /dst-jpg_[sp](?:50|60|100|160|200)x\1/.test(src)
+    ) {
+      return true;
+    }
+
+    // 3. Parent container check
+    if (isInsideAvatarContainer(el)) {
+      return true;
+    }
+
+    // 4. Alt & Aria-label checks
+    const alt = (el.alt || (typeof el.getAttribute === 'function' ? el.getAttribute('alt') : '') || '').toLowerCase().trim();
+    const ariaLabel = (typeof el.getAttribute === 'function' ? el.getAttribute('aria-label') : '' || '').toLowerCase().trim();
+    if (
+      alt.includes('profile picture') || alt.includes('ảnh đại diện') || alt.includes('avatar') ||
+      ariaLabel.includes('profile picture') || ariaLabel.includes('ảnh đại diện') || ariaLabel.includes('avatar')
+    ) {
+      return true;
+    }
+
+    // Check if alt or aria-label matches sender or conversation title
+    if (sender && sender !== 'Other' && sender !== 'You') {
+      const senderNorm = sender.toLowerCase().trim();
+      if (alt === senderNorm || ariaLabel === senderNorm) {
+        return true;
+      }
+    }
+    if (conversationTitle) {
+      const titleNorm = conversationTitle.toLowerCase().trim();
+      if (alt === titleNorm || ariaLabel === titleNorm) {
+        return true;
+      }
+    }
+
+    // 5. Rendered layout dimensions (Messenger chat avatars are typically 28px - 44px)
+    let layoutW = 0, layoutH = 0;
+    try {
+      if (typeof el.getBoundingClientRect === 'function') {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          layoutW = rect.width;
+          layoutH = rect.height;
+        }
+      }
+    } catch (e) {}
+
+    if (!layoutW || !layoutH) {
+      layoutW = el.offsetWidth || el.clientWidth || 0;
+      layoutH = el.offsetHeight || el.clientHeight || 0;
+    }
+
+    if (!layoutW || !layoutH) {
+      try {
+        const cs = window.getComputedStyle(el);
+        const pw = parseFloat(cs.width);
+        const ph = parseFloat(cs.height);
+        if (!isNaN(pw) && pw > 0) layoutW = pw;
+        if (!isNaN(ph) && ph > 0) layoutH = ph;
+      } catch (e) {}
+    }
+
+    // Avatars and badges in chat are <= 52px
+    if (layoutW > 0 && layoutH > 0 && layoutW <= 52 && layoutH <= 52) {
+      return true;
+    }
+
+    // 6. Circular styling check on element
+    try {
+      const cs = window.getComputedStyle(el);
+      const isCircular = cs.borderRadius === '50%' || cs.borderRadius.includes('50%');
+      // Sent photos never have circular 50% border radius
+      if (isCircular && (layoutW <= 72 || (!layoutW && (el.naturalWidth || 0) <= 200))) {
+        return true;
+      }
+    } catch (e) {}
+
+    return false;
+  }
+
+  function extractImagesFromElement(element, sender = '') {
+    const images = [];
+    const seenSrcs = new Set();
+
+    // 1. Regular <img> elements
+    const imgElements = element.querySelectorAll('img');
     imgElements.forEach(img => {
-      if (isAvatarOrIcon(img)) return;
+      if (isAvatarOrIcon(img, '', sender)) return;
 
       const src = img.src || '';
-      // Valid Facebook CDN photo patterns
       const isFbCdn = src.includes('fbcdn.net') || 
                       src.includes('scontent') || 
                       src.includes('cdninstagram.com') ||
@@ -193,8 +295,21 @@
 
       if (isFbCdn) {
         const highResSrc = getHighResImageSrc(img);
-        const w = img.naturalWidth || img.width || 200;
-        const h = img.naturalHeight || img.height || 200;
+        if (isAvatarOrIcon(img, highResSrc, sender)) return;
+        if (seenSrcs.has(highResSrc)) return;
+        seenSrcs.add(highResSrc);
+
+        let w = img.naturalWidth || img.width || 0;
+        let h = img.naturalHeight || img.height || 0;
+        if (!w || !h) {
+          try {
+            const rect = img.getBoundingClientRect();
+            w = rect.width || 200;
+            h = rect.height || 200;
+          } catch (e) {
+            w = 200; h = 200;
+          }
+        }
 
         images.push({
           src: highResSrc,
@@ -205,16 +320,25 @@
       }
     });
 
-    // Check CSS background-image
+    // 2. CSS background-image elements (strictly filtered)
     element.querySelectorAll('div[style*="background-image"]').forEach(bgEl => {
       const bgStyle = bgEl.style.backgroundImage || '';
       const match = bgStyle.match(/url\(["']?(https:\/\/[^"']*(?:fbcdn\.net|scontent)[^"']*)["']?\)/i);
-      if (match && match[1] && !match[1].includes('rsrc.php')) {
+      if (match && match[1]) {
+        const bgUrl = match[1];
+        if (isAvatarOrIcon(bgEl, bgUrl, sender)) return;
+        if (seenSrcs.has(bgUrl)) return;
+        seenSrcs.add(bgUrl);
+
+        let w = bgEl.offsetWidth || bgEl.clientWidth || 0;
+        let h = bgEl.offsetHeight || bgEl.clientHeight || 0;
+        if (w <= 52 && h <= 52 && (w > 0 || h > 0)) return;
+
         images.push({
-          src: match[1],
+          src: bgUrl,
           alt: 'Photo Background',
-          width: 200,
-          height: 200
+          width: w || 200,
+          height: h || 200
         });
       }
     });
@@ -242,69 +366,12 @@
         return;
       }
 
-      // 1. Text extraction
-      const textNode = row.querySelector('div[dir="auto"]') || row.querySelector('span[dir="auto"]');
-      const text = textNode ? textNode.innerText.trim() : '';
-
-      // Skip non-message giant containers
-      if (!textNode && row.innerText && row.innerText.length > 500) {
+      // Avoid nested row processing if current row is an inner child of another message row
+      if (row.parentElement && row.parentElement.closest('div[role="row"]')) {
         return;
       }
 
-      // 2. Photos & Media
-      const images = extractImagesFromElement(row);
-
-      // 3. Videos
-      const videos = [];
-      row.querySelectorAll('video').forEach(v => {
-        const src = v.src || (v.querySelector('source') ? v.querySelector('source').src : '');
-        if (src) videos.push(src);
-      });
-
-      // 4. Voice Notes & Audio Clips
-      const audios = [];
-      row.querySelectorAll('audio').forEach(a => {
-        const src = a.src || (a.querySelector('source') ? a.querySelector('source').src : '');
-        if (src && !audios.includes(src)) audios.push(src);
-      });
-      row.querySelectorAll('[aria-label*="voice clip"], [aria-label*="tin nhắn thoại"], [aria-label*="Voice"]').forEach(vEl => {
-        const a = vEl.querySelector('audio');
-        if (a && a.src && !audios.includes(a.src)) audios.push(a.src);
-      });
-
-      // 5. File & Document Attachments
-      const files = [];
-      row.querySelectorAll('a[href*="attachment"], a[download], a[href*="messages/attachments"]').forEach(a => {
-        const fileName = a.innerText.trim() || a.getAttribute('download') || 'Document Attachment';
-        if (fileName && a.href && !a.href.startsWith('javascript')) {
-          files.push({ name: fileName.slice(0, 100), url: a.href });
-        }
-      });
-
-      // 6. Stickers
-      const stickers = [];
-      row.querySelectorAll('img[src*="sticker"]').forEach(s => {
-        if (s.src) stickers.push(s.src);
-      });
-
-      // 7. Reply Quote Detection
-      let replyTo = null;
-      const replyBlock = row.querySelector('[aria-label*="replied"], [aria-label*="đã trả lời"], [data-scope="quoted_message"]');
-      if (replyBlock) {
-        const quoteText = replyBlock.innerText.trim();
-        if (quoteText && quoteText !== text) {
-          replyTo = { text: quoteText.slice(0, 200) };
-        }
-      }
-
-      // 5. Timestamp
-      let timestamp = '';
-      const timeElem = row.querySelector('span[title], div[title], time, [data-scope="date_time"]');
-      if (timeElem) {
-        timestamp = timeElem.getAttribute('title') || timeElem.innerText.trim();
-      }
-
-      // 6. Sender & Outgoing Detection
+      // 1. Sender & Outgoing Detection (evaluated before media extraction)
       let sender = 'Other';
       const ariaLabel = (row.getAttribute('aria-label') || '').toLowerCase();
       const isOutgoing = ariaLabel.includes('you sent') ||
@@ -324,6 +391,68 @@
         } else {
           sender = lastKnownIncomingSender || conversationTitle || 'Other';
         }
+      }
+
+      // 2. Text extraction
+      const textNode = row.querySelector('div[dir="auto"]') || row.querySelector('span[dir="auto"]');
+      const text = textNode ? textNode.innerText.trim() : '';
+
+      // Skip non-message giant containers
+      if (!textNode && row.innerText && row.innerText.length > 500) {
+        return;
+      }
+
+      // 3. Photos & Media (strictly filtered with sender context)
+      const images = extractImagesFromElement(row, sender);
+
+      // 4. Videos
+      const videos = [];
+      row.querySelectorAll('video').forEach(v => {
+        const src = v.src || (v.querySelector('source') ? v.querySelector('source').src : '');
+        if (src) videos.push(src);
+      });
+
+      // 5. Voice Notes & Audio Clips
+      const audios = [];
+      row.querySelectorAll('audio').forEach(a => {
+        const src = a.src || (a.querySelector('source') ? a.querySelector('source').src : '');
+        if (src && !audios.includes(src)) audios.push(src);
+      });
+      row.querySelectorAll('[aria-label*="voice clip"], [aria-label*="tin nhắn thoại"], [aria-label*="Voice"]').forEach(vEl => {
+        const a = vEl.querySelector('audio');
+        if (a && a.src && !audios.includes(a.src)) audios.push(a.src);
+      });
+
+      // 6. File & Document Attachments
+      const files = [];
+      row.querySelectorAll('a[href*="attachment"], a[download], a[href*="messages/attachments"]').forEach(a => {
+        const fileName = a.innerText.trim() || a.getAttribute('download') || 'Document Attachment';
+        if (fileName && a.href && !a.href.startsWith('javascript')) {
+          files.push({ name: fileName.slice(0, 100), url: a.href });
+        }
+      });
+
+      // 7. Stickers
+      const stickers = [];
+      row.querySelectorAll('img[src*="sticker"]').forEach(s => {
+        if (s.src) stickers.push(s.src);
+      });
+
+      // 8. Reply Quote Detection
+      let replyTo = null;
+      const replyBlock = row.querySelector('[aria-label*="replied"], [aria-label*="đã trả lời"], [data-scope="quoted_message"]');
+      if (replyBlock) {
+        const quoteText = replyBlock.innerText.trim();
+        if (quoteText && quoteText !== text) {
+          replyTo = { text: quoteText.slice(0, 200) };
+        }
+      }
+
+      // 9. Timestamp
+      let timestamp = '';
+      const timeElem = row.querySelector('span[title], div[title], time, [data-scope="date_time"]');
+      if (timeElem) {
+        timestamp = timeElem.getAttribute('title') || timeElem.innerText.trim();
       }
 
       // Valid message condition: must contain text OR images OR videos OR audios OR files OR stickers
